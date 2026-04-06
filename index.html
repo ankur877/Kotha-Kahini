@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VoiceStudio — ANKUR & DOLI</title>
+<title>Voice Studio</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;1,300&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -465,8 +465,8 @@ header {
 <div class="app">
   <header>
     <div class="logo">
-      <span class="logo-mark">VoiceStudio</span>
-      <span class="logo-sub">by Ankur &amp; Doli</span>
+      <span class="logo-mark">Voice Studio by ANKUR</span>
+      <span class="logo-sub">by Ankur</span>
     </div>
     <div class="header-actions">
       <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
@@ -475,8 +475,7 @@ header {
     </div>
   </header>
 
-  <!-- VOICE SELECTOR -->
-  <div class="section-label">Choose Voice</div>
+  <div class="section-label"></div>
   <div class="voice-selector">
     <div class="voice-card ankur active" id="cardAnkur" onclick="selectVoice('ankur')">
       <div class="voice-avatar">
@@ -500,7 +499,6 @@ header {
     </div>
   </div>
 
-  <!-- TABS -->
   <div class="tabs">
     <button class="tab active" id="tabText" onclick="switchTab('text')">
       <span class="tab-icon">✏️</span> Paste Text
@@ -513,7 +511,6 @@ header {
     </button>
   </div>
 
-  <!-- TEXT PANEL -->
   <div class="panel active" id="panelText">
     <div class="text-panel">
       <div class="text-toolbar">
@@ -531,7 +528,6 @@ header {
     </div>
   </div>
 
-  <!-- PDF PANEL -->
   <div class="panel" id="panelPdf">
     <div class="pdf-drop" id="pdfDrop" onclick="document.getElementById('pdfInput').click()">
       <input type="file" id="pdfInput" class="pdf-input" accept=".pdf" onchange="handlePdfUpload(event)">
@@ -553,7 +549,6 @@ header {
     </div>
   </div>
 
-  <!-- STT PANEL -->
   <div class="panel" id="panelStt">
     <div class="stt-zone">
       <div class="stt-header">
@@ -578,7 +573,6 @@ header {
     </div>
   </div>
 
-  <!-- PLAYER SECTION -->
   <div class="player-section" id="playerSection">
     <div class="waveform-container" id="waveformContainer">
       <div class="waveform-label">Waveform</div>
@@ -1119,12 +1113,13 @@ function startSTT() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) { showToast('Speech recognition not supported', 'error'); return; }
 
-  navigator.mediaDevices.getUserMedia({ audio: true })
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
     .then(() => {
       state.recognition = new SpeechRecognition();
       state.recognition.continuous = true;
       state.recognition.interimResults = true;
       state.recognition.lang = 'en-US';
+      state.recognition.maxAlternatives = 1;
 
       state.recognition.onstart = () => {
         state.sttActive = true;
@@ -1158,7 +1153,13 @@ function startSTT() {
       };
 
       state.recognition.onend = () => {
-        if (state.sttActive) state.recognition.start(); // keep going
+        if (state.sttActive && state.recognition) {
+          try {
+            setTimeout(() => state.recognition.start(), 150);
+          } catch (e) {
+            console.warn('Restart error:', e);
+          }
+        }
       };
 
       state.recognition.start();
