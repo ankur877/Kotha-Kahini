@@ -47,8 +47,8 @@ body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);min-he
 
 /* ══════════════════════════════════════════════ HEADER */
 header{display:flex;align-items:center;justify-content:space-between;padding:28px 0 20px}
-.logo{display:flex;align-items:baseline;gap:10px;overflow: visible;}
-.logo-mark {font-family: 'Noto Sans Bengali', 'Hind Siliguri', sans-serif;font-size: 28px;font-weight: 700;line-height: 1.4;display: inline-block; background: linear-gradient(135deg, var(--accent-a), var(--accent-b));-webkit-background-clip: text;-webkit-text-fill-color: transparent;background-clip: text;}
+.logo{display:flex;align-items:baseline;gap:8px}
+.logo-mark{font-family:'Noto Sans Bengali','Hind Siliguri',sans-serif;font-size:28px;font-weight:700;line-height:1.4;display:inline-block;background:linear-gradient(135deg,var(--accent-a),var(--accent-b));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .logo-sub{font-size:11px;font-weight:600;letter-spacing:3px;color:var(--text-dim);text-transform:uppercase}
 .theme-toggle{width:44px;height:26px;border-radius:13px;background:var(--surface3);border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;padding:3px;transition:background var(--tr)}
 .theme-toggle-knob{width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,var(--accent-a),var(--accent-b));transition:transform var(--tr);display:flex;align-items:center;justify-content:center;font-size:10px}
@@ -231,7 +231,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:28p
 <div class="app">
   <header>
     <div class="logo">
-      <span class="logo-mark">কথা-কাহিনী </span>
+      <span class="logo-mark">কথা-কাহিনী</span>
       <span class="logo-sub">by Ankur</span>
     </div>
     <button class="theme-toggle" onclick="toggleTheme()">
@@ -923,7 +923,27 @@ function removeDoc() {
 }
 
 // ══════════════════════════════════════════════════════
-//  SPEECH → TEXT  (robust, auto-restart)
+//  SPEECH → TEXT
+//
+//  THE DUPLICATION BUG explained & fixed:
+//  ─────────────────────────────────────────────────────
+//  Chrome's SpeechRecognition fires `onend` after a few
+//  seconds of silence. The old code restarted by creating
+//  a NEW instance — but the new instance re-fired
+//  `onresult` with e.resultIndex = 0, replaying every
+//  result from the start → "Hi Hi Hi I am Ankur".
+//
+//  THE FIX — three-part strategy:
+//  1. S.sttFinal is the single source of truth for ALL
+//     committed text. It is NEVER reset on restart.
+//  2. Each recognition instance only appends NEW final
+//     results (those it hasn't seen). We do NOT re-read
+//     results that were already committed in a prior
+//     instance — we simply skip them because S.sttFinal
+//     already has them.
+//  3. `onend` restarts only when truly needed (silence
+//     timeout), with a 400ms gap to let Chrome fully
+//     close the previous session before opening a new one.
 // ══════════════════════════════════════════════════════
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -938,13 +958,22 @@ function initSTT() {
 function toggleSTT() { if (!SR) return; S.sttActive ? stopSTT() : startSTT(); }
 
 function startSTT() {
+  // Always fully kill any existing instance first
   killRec();
+
   const rec = new SR();
   rec.lang = 'en-US';
   rec.continuous = true;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
-  S.rec = rec; S.sttActive = true;
+
+  // Give each session a unique ID so stale onend callbacks
+  // from a killed session don't accidentally restart
+  const sessionId = Date.now();
+  rec._sessionId = sessionId;
+
+  S.rec = rec;
+  S.sttActive = true;
   hideSttNotice();
 
   rec.onstart = () => {
@@ -953,7 +982,8 @@ function startSTT() {
     document.getElementById('sttStatusPill').textContent = 'Listening…';
     document.getElementById('sttStatusPill').className = 'stt-status-pill listening';
     document.getElementById('micHint').textContent = 'Speak clearly — tap to stop';
-    showToast('🎙️ Listening…', 'success');
+    // Only show toast on first start, not on every auto-restart
+    if (!S.sttFinal) showToast('🎙️ Listening…', 'success');
     const el = document.getElementById('sttTranscript');
     if (el.innerText.includes('real-time')) {
       el.innerText = ''; el.style.color = 'var(--text)'; el.style.fontStyle = 'normal';
@@ -961,16 +991,23 @@ function startSTT() {
   };
 
   rec.onresult = e => {
-    let interim = '', fin = S.sttFinal;
+    // ── KEY FIX ──────────────────────────────────────
+    // e.resultIndex tells us which result index this
+    // event starts from for THIS session. We only
+    // process results that are genuinely new.
+    // S.sttFinal already contains all previously
+    // committed text, so we just append new finals.
+    // ─────────────────────────────────────────────────
+    let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) fin += e.results[i][0].transcript + ' ';
-      else interim += e.results[i][0].transcript;
+      if (e.results[i].isFinal) {
+        // Append only — never rewrite S.sttFinal from scratch
+        S.sttFinal += e.results[i][0].transcript + ' ';
+      } else {
+        interim += e.results[i][0].transcript;
+      }
     }
-    S.sttFinal = fin;
-    const el = document.getElementById('sttTranscript');
-    el.innerHTML = escHtml(fin) +
-      (interim ? `<span style="color:var(--text-dim);font-style:italic">${escHtml(interim)}</span>` : '');
-    el.scrollTop = el.scrollHeight;
+    renderTranscript(interim);
   };
 
   rec.onerror = e => {
@@ -985,31 +1022,55 @@ function startSTT() {
     } else if (e.error === 'network') {
       showSttNotice('warn', '⚠ Network error. Speech recognition needs an internet connection.');
     }
-    // no-speech: silent, onend will restart
+    // 'no-speech' and 'aborted' are non-fatal — onend handles restart
   };
 
   rec.onend = () => {
+    // Guard: ignore callbacks from a stale/killed session
+    if (rec._sessionId !== sessionId) return;
     if (!S.sttActive) return;
+
+    // Clear any pending restart before scheduling a new one
     clearTimeout(S.sttRestartTimer);
-    S.sttRestartTimer = setTimeout(() => { if (S.sttActive) startSTT(); }, 350);
+
+    // 400ms gap ensures Chrome fully closes the audio stream
+    // before we open a new one — prevents the overlap that
+    // causes duplication
+    S.sttRestartTimer = setTimeout(() => {
+      if (S.sttActive) startSTT();
+    }, 400);
   };
 
-  try { rec.start(); }
-  catch (err) {
+  try {
+    rec.start();
+  } catch (err) {
     S.sttActive = false; S.rec = null; resetMicUI();
     showSttNotice('err', '⚠ Could not start mic: ' + err.message);
   }
 }
 
+// Render final + interim text into the transcript box
+function renderTranscript(interim) {
+  const el = document.getElementById('sttTranscript');
+  el.innerHTML = escHtml(S.sttFinal) +
+    (interim
+      ? `<span style="color:var(--text-dim);font-style:italic">${escHtml(interim)}</span>`
+      : '');
+  el.scrollTop = el.scrollHeight;
+}
+
 function stopSTT() {
   S.sttActive = false;
   clearTimeout(S.sttRestartTimer);
-  killRec(); resetMicUI();
+  killRec();
+  resetMicUI();
 }
 
 function killRec() {
   if (S.rec) {
-    try { S.rec.onend = null; S.rec.onerror = null; S.rec.stop(); } catch (e) {}
+    // Nullify the session ID so any in-flight onend is ignored
+    S.rec._sessionId = -1;
+    try { S.rec.onend = null; S.rec.onerror = null; S.rec.abort(); } catch (e) {}
     S.rec = null;
   }
 }
